@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="IocpChatServer/IocpChatServer.vcxproj" Id="dcc8982d-bb5d-4806-a253-0ef9a77f5eb1" />
+</Solution>
