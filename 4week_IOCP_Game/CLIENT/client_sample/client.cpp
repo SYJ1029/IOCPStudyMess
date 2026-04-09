@@ -301,7 +301,8 @@ int main()
 					break;
 				case sf::Keyboard::Escape:
 					window.close();
-					break;
+					client_finish();
+					return 0;
 				}
 				if (-1 != direction) {
 					C2S_Move p;
