@@ -5,7 +5,7 @@
 #include <thread>
 #include <vector>
 #include "protocol.h"
-#include <concurrent_unordered_map.h>
+#include <tbb/concurrent_unordered_map.h>
 
 #pragma comment(lib, "MSWSock.lib")
 #pragma comment(lib, "WS2_32.lib")
@@ -16,6 +16,10 @@ constexpr int BUF_SIZE = 200;
 std::atomic<int> player_index = 0;
 
 enum IOType { IO_SEND, IO_RECV, IO_ACCEPT };
+
+HANDLE h_iocp;
+SOCKET server;
+SOCKET client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 
 class EXP_OVER {
 public:
@@ -38,6 +42,8 @@ public:
 	}
 };
 
+EXP_OVER accept_over(IO_ACCEPT);
+
 void error_display(const wchar_t* msg, int err_no)
 {
 	WCHAR* lpMsgBuf;
@@ -49,7 +55,7 @@ void error_display(const wchar_t* msg, int err_no)
 		(LPTSTR)&lpMsgBuf, 0, NULL);
 	std::wcout << msg;
 	std::wcout << L" === ¿¡·¯ " << lpMsgBuf << std::endl;
-	while (true);   // µð¹ö±ë ¿ë
+	//while (true);   // µð¹ö±ë ¿ë
 	LocalFree(lpMsgBuf);
 }
 
@@ -77,8 +83,10 @@ public:
 	}
 	~SESSION()
 	{
-		if (m_is_connected)
+		if (m_state == CS_LOGOUT)
+		{
 			closesocket(m_client);
+		}
 	}
 	void do_recv()
 	{
@@ -125,7 +133,8 @@ public:
 	void process_packet(unsigned char* p);
 };
 
-concurrency::concurrent_unordered_map<int, 
+
+tbb::concurrent_unordered_map<int,
 	std::atomic<std::shared_ptr<SESSION>>> clients;
 
 void SESSION::send_add_player(int player_id)
@@ -134,10 +143,10 @@ void SESSION::send_add_player(int player_id)
 	packet.size = sizeof(S2C_AddPlayer);
 	packet.type = S2C_ADD_PLAYER;
 	packet.playerId = player_id;
-	SESSION& pl = clients[player_id];
-	memcpy(packet.username, pl.m_username, sizeof(packet.username));
-	packet.x = pl.m_x;
-	packet.y = pl.m_y;
+	SESSION* pl = clients[player_id].load().get();
+	memcpy(packet.username, pl->m_username, sizeof(packet.username));
+	packet.x = pl->m_x;
+	packet.y = pl->m_y;
 	do_send(packet.size, reinterpret_cast<char*>(&packet));
 }
 
@@ -149,7 +158,16 @@ void SESSION::process_packet(unsigned char* p)
 		C2S_Login* packet = reinterpret_cast<C2S_Login*>(p);
 		strncpy_s(m_username, packet->username, MAX_NAME_LEN);
 		cout << "Player[" << m_id << "] logged in as " << m_username << endl;
+		clients[m_id].load()->m_state = CS_PLAYING;
 		send_avatar_info();
+		for (auto& other : clients) {
+			if (!other.second.load()) continue;
+			if (CS_PLAYING != other.second.load()->m_state) continue;
+			if (other.second.load()->m_id == m_id) continue;
+			other.second.load()->send_add_player(m_id);
+			clients[m_id].load()->send_add_player(other.second.load()->m_id);
+		}
+
 	}
 				  break;
 	case C2S_MOVE: {
@@ -163,8 +181,8 @@ void SESSION::process_packet(unsigned char* p)
 		}
 		cout << "Player[" << m_id << "] moved to (" << m_x << ", " << m_y << ")\n";
 		for (auto& cl : clients)
-			if (true == cl.m_is_connected)
-				cl.send_move_packet(m_id);
+			if (cl.second.load() && cl.second.load()->m_state != CS_LOGOUT)
+				cl.second.load()->send_move_packet(m_id);
 	}
 				 break;
 	default:
@@ -179,8 +197,8 @@ void SESSION::send_move_packet(int mover)
 	packet.size = sizeof(S2C_MovePlayer);
 	packet.type = S2C_MOVE_PLAYER;
 	packet.playerId = mover;
-	packet.x = clients[mover].m_x;
-	packet.y = clients[mover].m_y;
+	packet.x = clients[mover].load()->m_x;
+	packet.y = clients[mover].load()->m_y;
 	do_send(packet.size, reinterpret_cast<char*>(&packet));
 }
 
@@ -226,46 +244,63 @@ void worker_thread()
 			continue;
 		}
 		EXP_OVER* exp_over = reinterpret_cast<EXP_OVER*>(over);
+		
+
 		switch (exp_over->m_iotype) {
 		case IO_ACCEPT:
+		{
 			cout << "Client connected." << endl;
+			//client_socket = exp_over->m_client_socket;
 			if (MAX_PLAYERS <= clients.size()) {
 				cout << "No more player can be accepted." << endl;
 				send_login_fail(exp_over->m_client_socket, "Server is full.");
 				closesocket(exp_over->m_client_socket);
 			}
-			int my_id = player_index++;
-
 			else {
-				CreateIoCompletionPort((HANDLE)client_socket, h_iocp, player_index, 0);
-				clients[player_index].m_is_connected = true;
-				clients[player_index].m_client = client_socket;
-				clients[player_index].m_x = 0;
-				clients[player_index].m_y = 0;
-				clients[player_index].m_id = player_index;
-				clients[player_index].send_login_success();
-				clients[player_index].m_prev_recv = 0;
+				int my_id = player_index++;
+				CreateIoCompletionPort((HANDLE)client_socket, h_iocp, my_id, 0);
+				clients[my_id].store(make_shared<SESSION>(client_socket, my_id));
+				clients[my_id].load()->m_state = CS_CONNECT;
+				clients[my_id].load()->m_client = client_socket;
+				clients[my_id].load()->m_x = 0;
+				clients[my_id].load()->m_y = 0;
+				clients[my_id].load()->m_id = my_id;
+				clients[my_id].load()->send_login_success();
+				clients[my_id].load()->m_prev_recv = 0;
 
-				for (auto& other : clients) {
-					if (false == other.m_is_connected) continue;
-					if (other.m_id == player_index) continue;
-					other.send_add_player(player_index);
-					clients[player_index].send_add_player(other.m_id);
-				}
 
-				clients[player_index].do_recv();
+
+				clients[my_id].load()->do_recv();
 			}
 			client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+			EXP_OVER accept_over(IO_ACCEPT);
 			AcceptEx(server, client_socket, &accept_over.m_buff, 0,
 				sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16,
 				NULL, &accept_over.m_over);
+
 			break;
+		}
 		case IO_RECV:
 		{
 			int player_index = static_cast<int>(key);
 			cout << "Client[" << player_index << "] sent a message." << endl;
-			SESSION& cl = clients[player_index];
+			SESSION& cl = *clients[player_index].load();
 			unsigned char* p = reinterpret_cast<unsigned char*>(exp_over->m_buff);
+			if(num_bytes == 0) {
+				cout << "Client[" << player_index << "] Disconnected.\n";
+				cl.m_state = CS_LOGOUT;
+				for (auto& other : clients) {
+					std::shared_ptr<SESSION> o = other.second.load();
+					if (nullptr == o) continue;
+					if (CS_PLAYING == o->m_state)
+						o->send_remove_player(player_index);
+
+				}
+				closesocket(cl.m_client);
+				cl.m_client = INVALID_SOCKET;
+				clients[player_index].store(nullptr);
+				continue;
+			}
 			int data_size = num_bytes + cl.m_prev_recv;
 			while (data_size > 0) {
 				int packet_size = p[0];
@@ -299,20 +334,21 @@ int main()
 {
 	WSADATA WSAData;
 	WSAStartup(MAKEWORD(2, 2), &WSAData);
-	SOCKET server = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+	server = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+		
 	SOCKADDR_IN server_addr;
 	memset(&server_addr, 0, sizeof(server_addr));
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_port = htons(PORT);
 	server_addr.sin_addr.S_un.S_addr = INADDR_ANY;
-	bind(server, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
+	::bind(server, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
 	listen(server, SOMAXCONN);
-	HANDLE h_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+	h_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	CreateIoCompletionPort((HANDLE)server, h_iocp, -1, 0);
 
-	SOCKET client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+	client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 
-	EXP_OVER accept_over(IO_ACCEPT);
+	
 	AcceptEx(server, client_socket, &accept_over.m_buff, 0,
 		sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16,
 		NULL, &accept_over.m_over);
