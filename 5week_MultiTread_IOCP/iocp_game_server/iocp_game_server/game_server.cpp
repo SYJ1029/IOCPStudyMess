@@ -19,7 +19,6 @@ enum IOType { IO_SEND, IO_RECV, IO_ACCEPT };
 
 HANDLE h_iocp;
 SOCKET server;
-SOCKET client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 
 class EXP_OVER {
 public:
@@ -42,7 +41,6 @@ public:
 	}
 };
 
-EXP_OVER accept_over(IO_ACCEPT);
 
 void error_display(const wchar_t* msg, int err_no)
 {
@@ -258,23 +256,15 @@ void worker_thread()
 			}
 			else {
 				int my_id = player_index++;
-				CreateIoCompletionPort((HANDLE)client_socket, h_iocp, my_id, 0);
-				clients[my_id].store(make_shared<SESSION>(client_socket, my_id));
-				clients[my_id].load()->m_state = CS_CONNECT;
-				clients[my_id].load()->m_client = client_socket;
-				clients[my_id].load()->m_x = 0;
-				clients[my_id].load()->m_y = 0;
-				clients[my_id].load()->m_id = my_id;
-				clients[my_id].load()->send_login_success();
-				clients[my_id].load()->m_prev_recv = 0;
-
-
-
-				clients[my_id].load()->do_recv();
+				CreateIoCompletionPort((HANDLE)exp_over->m_client_socket, h_iocp, my_id, 0);
+				std::shared_ptr<SESSION> new_pl = std::make_shared<SESSION>(exp_over->m_client_socket, my_id);
+				clients[my_id] = new_pl;
+				new_pl->send_login_success();
+				new_pl->do_recv();
 			}
-			client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+			exp_over->m_client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 			EXP_OVER accept_over(IO_ACCEPT);
-			AcceptEx(server, client_socket, &accept_over.m_buff, 0,
+			AcceptEx(server, exp_over->m_client_socket, &accept_over.m_buff, 0,
 				sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16,
 				NULL, &accept_over.m_over);
 
@@ -346,10 +336,12 @@ int main()
 	h_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	CreateIoCompletionPort((HANDLE)server, h_iocp, -1, 0);
 
-	client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+
+	EXP_OVER accept_over(IO_ACCEPT);
+	accept_over.m_client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
 
 	
-	AcceptEx(server, client_socket, &accept_over.m_buff, 0,
+	AcceptEx(server, accept_over.m_client_socket, &accept_over.m_buff, 0,
 		sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16,
 		NULL, &accept_over.m_over);
 
