@@ -156,14 +156,15 @@ void SESSION::process_packet(unsigned char* p)
 		C2S_Login* packet = reinterpret_cast<C2S_Login*>(p);
 		strncpy_s(m_username, packet->username, MAX_NAME_LEN);
 		cout << "Player[" << m_id << "] logged in as " << m_username << endl;
-		clients[m_id].load()->m_state = CS_PLAYING;
+		m_state = CS_PLAYING;
 		send_avatar_info();
 		for (auto& other : clients) {
-			if (!other.second.load()) continue;
-			if (CS_PLAYING != other.second.load()->m_state) continue;
-			if (other.second.load()->m_id == m_id) continue;
-			other.second.load()->send_add_player(m_id);
-			clients[m_id].load()->send_add_player(other.second.load()->m_id);
+			std::shared_ptr<SESSION> pl = other.second.load();
+			if (!pl) continue;
+			if (CS_PLAYING != pl->m_state) continue;
+			if (pl->m_id == m_id) continue;
+			pl->send_add_player(m_id);
+			send_add_player(pl->m_id);
 		}
 
 	}
@@ -195,11 +196,13 @@ void SESSION::send_move_packet(int mover)
 	packet.size = sizeof(S2C_MovePlayer);
 	packet.type = S2C_MOVE_PLAYER;
 	packet.playerId = mover;
-	packet.x = clients[mover].load()->m_x;
-	packet.y = clients[mover].load()->m_y;
-	do_send(packet.size, reinterpret_cast<char*>(&packet));
+	std::shared_ptr<SESSION> pl = clients[mover].load();
+	if (pl) {
+		packet.x = pl->m_x;
+		packet.y = pl->m_y;
+		do_send(packet.size, reinterpret_cast<char*>(&packet));
+	}
 }
-
 void send_login_fail(SOCKET client, const char* message)
 {
 	S2C_LoginResult packet;
