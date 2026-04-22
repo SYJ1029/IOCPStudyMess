@@ -8,6 +8,7 @@
 #include <tbb/concurrent_unordered_map.h>
 #include <mutex>
 #include <unordered_set>
+#include <cmath>
 
 
 #include <tbb/concurrent_unordered_set.h>
@@ -90,10 +91,10 @@ public:
 		closesocket(m_client);
 	}
 
-	bool is_visible(short other_x, short other_y) {
-		// 3D 게임에서는 사각형보다 원이 낫지만... 지금은 2D라서 사각형이여도 문제는 없다
-		return abs(m_x - other_x) <= VIEW_RANGE 
-			&& abs(m_y - other_y) <= VIEW_RANGE;
+	bool is_visible(short x, short y)
+	{
+		return abs(m_x - x) <= VIEW_RANGE
+			&& abs(m_y - y) <= VIEW_RANGE;
 	}
 
 	void do_recv()
@@ -181,7 +182,13 @@ void SESSION::send_add_player(int player_id)
 
 void SESSION::do_move(DIRECTION dir)
 {
-	auto old_v = m_visible_players; // 새로 검색할 필요가 없다
+	// 케이스가 커지면 m_visivle_players 복사 과정에서 한번씩 Crash가 터질 수 있으므로 lock을 추가로 걸어야 한다
+	std::unordered_set<int> old_v;
+	{
+		std::lock_guard<std::mutex> lg(m_visible_mutex);
+		old_v = m_visible_players;
+	}
+
 
 	switch (dir) {
 	case UP: m_y = max(0, m_y - 1); break;
@@ -196,6 +203,7 @@ void SESSION::do_move(DIRECTION dir)
 	for (auto& cl : clients) {
 		std::shared_ptr<SESSION> pl = cl.second.load();
 		if (nullptr == pl) continue;
+		if (pl->m_id == m_id) continue;
 		if (CS_PLAYING != pl->m_state) continue;
 		if (is_visible(pl->m_x, pl->m_y)) {
 			new_v.insert(pl->m_id);
@@ -207,10 +215,12 @@ void SESSION::do_move(DIRECTION dir)
 
 	for(int id : new_v) {
 		if (old_v.count(id) == 0) {
+
 			// 새로 보이는 플레이어
 			send_add_player(id);
 			std::shared_ptr<SESSION> pl = clients[id];
 			if (nullptr == pl) continue;
+			
 			pl->send_add_player(m_id);
 		}
 	}

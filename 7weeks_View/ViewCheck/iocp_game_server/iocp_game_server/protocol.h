@@ -3,7 +3,7 @@
 constexpr short PORT = 3500;
 constexpr int WORLD_WIDTH = 400;
 constexpr int WORLD_HEIGHT = 400;
-constexpr int MAX_PLAYERS = 5000;
+constexpr int MAX_PLAYERS = 20000;
 constexpr int MAX_NAME_LEN = 20;
 
 enum PACKET_TYPE { C2S_LOGIN, C2S_MOVE, S2C_LOGIN_RESULT, S2C_AVATAR_INFO, S2C_ADD_PLAYER, S2C_REMOVE_PLAYER, S2C_MOVE_PLAYER };
