@@ -123,6 +123,24 @@ public:
 		return { sectors[sid]->m_players.begin(), sectors[sid]->m_players.end() };
 	}
 
+	std::vector<int> get_players_in_adjacent_sectors(short x, short y) {
+		std::vector<int> result;
+		int sx = SECTOR_X(x);
+		int sy = SECTOR_Y(y);
+		for (int dx = -1; dx <= 1; ++dx) {
+			for (int dy = -1; dy <= 1; ++dy) {
+				int nsx = sx + dx;
+				int nsy = sy + dy;
+				if (nsx < 0 || nsx >= MAX_SECTORS_X || nsy < 0 || nsy >= MAX_SECTORS_Y)
+					continue;
+				int sid = SECTOR_ID(nsx, nsy);
+				std::lock_guard<std::mutex> lg(sectors[sid]->m_mutex);
+				result.insert(result.end(), sectors[sid]->m_players.begin(), sectors[sid]->m_players.end());
+			}
+		}
+		return result;
+	}
+
 private:
 	std::array<std::shared_ptr<SECTOR>, MAX_SECTORS_X* MAX_SECTORS_Y> sectors;
 };
@@ -253,6 +271,7 @@ void SESSION::send_add_player(int player_id)
 
 void SESSION::do_move(DIRECTION dir)
 {
+	short old_x = m_x, old_y = m_y;
 	auto old_v = m_visible_players; // 새로 검색할 필요가 없다
 
 	switch (dir) {
@@ -262,11 +281,20 @@ void SESSION::do_move(DIRECTION dir)
 	case RIGHT: m_x = min(WORLD_WIDTH - 1, m_x + 1); break;
 	}
 
+	// 섹터 변경 체크
+	int old_sid = SECTOR_ID(SECTOR_X(old_x), SECTOR_Y(old_y));
+	int new_sid = SECTOR_ID(SECTOR_X(m_x), SECTOR_Y(m_y));
+	if (old_sid != new_sid) {
+		sector_manager.remove_player_from_sector(m_id, old_x, old_y);
+		sector_manager.add_player_to_sector(m_id, m_x, m_y);
+	}
+
+
 	std::unordered_set<int> new_v;
 
 	// cout << "Player[" << m_id << "] moved to (" << m_x << ", " << m_y << ")\n";
 
-	for (auto& cl : sector_manager.get_players_in_sector(m_x, m_y)) {
+	for (auto& cl : sector_manager.get_players_in_adjacent_sectors(m_x, m_y)) {
 		std::shared_ptr<SESSION> pl = clients[cl];
 		if (nullptr == pl) continue;
 		if (CS_PLAYING != pl->m_state) continue;
