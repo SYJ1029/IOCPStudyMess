@@ -11,12 +11,11 @@
 
 #pragma comment(lib, "WS2_32.lib")
 #pragma comment(lib, "MSWSock.lib")
-using namespace std;	
-using namespace chrono;
-
+using namespace std;
 
 constexpr int VIEW_RANGE = 5;
-constexpr int DURATION = 1000;  // ms 단위, NPC heart_beat 주기
+constexpr int DURATION = 1000;        // ms 단위, NPC heart_beat 주기
+constexpr int MOVE_COOL_TIME = 1000;  // ms 단위, NPC 이동 쿨타임
 
 
 enum COMP_TYPE { OP_ACCEPT, OP_RECV, OP_SEND };
@@ -59,6 +58,7 @@ public:
 	unordered_set <int> _view_list;
 	mutex	_vl;
 	int		last_move_time;
+	long long npc_last_move_time;
 public:
 	SESSION()
 	{
@@ -68,6 +68,7 @@ public:
 		_name[0] = 0;
 		_state = ST_FREE;
 		_prev_remain = 0;
+		npc_last_move_time = 0;
 	}
 
 	~SESSION() {}
@@ -116,6 +117,8 @@ public:
 		p.type = SC_REMOVE_OBJECT;
 		do_send(&p);
 	}
+
+	void heart_beat();
 };
 
 HANDLE h_iocp;
@@ -367,18 +370,33 @@ void do_npc_random_move(int npc_id)
 	}
 }
 
+void SESSION::heart_beat()
+{
+	using namespace chrono;
+	long long now_ms = duration_cast<milliseconds>(
+		system_clock::now().time_since_epoch()).count();
+
+	if (now_ms - npc_last_move_time >= MOVE_COOL_TIME) {
+		do_npc_random_move(_id);
+		npc_last_move_time = now_ms;
+	}
+}
+
 void ai_thread(HANDLE h_iocp)
 {
-	// npc를 random하게 이동시킴
+	// Heart Beat 함수만 주기적으로 실행
+	using namespace chrono;
 	while (true) {
 		auto curr_heart_beat = system_clock::now();
+
 		for (int i = MAX_USER; i < MAX_USER + MAX_NPC; ++i) {
-			do_npc_random_move(i);
-			auto elapsed = duration_cast<milliseconds>(system_clock::now() - curr_heart_beat).count();
-			long long delay = DURATION - elapsed;
-			if (delay < 0) delay = 0;
+			clients[i].heart_beat();
 		}
-	}
+
+		auto elapsed = duration_cast<milliseconds>(
+			system_clock::now() - curr_heart_beat).count();
+		long long delay = DURATION - elapsed;
+		if (delay < 0) delay = 0;
 		//Sleep(static_cast<DWORD>(delay));
 	}
 }

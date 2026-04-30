@@ -141,13 +141,13 @@
     <Image Include="chessmap.bmp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\SERVER\SERVER\protocol.h" />
-  </ItemGroup>
-  <ItemGroup>
     <Font Include="cour.ttf" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\iocp_game_server\iocp_game_server\protocol.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
