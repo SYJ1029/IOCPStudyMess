@@ -15,19 +15,8 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="DrawModule.cpp">
+    <ClCompile Include="Clua.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="NetworkModule.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="NetworkModule.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\iocp_game_server\iocp_game_server\protocol.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
   </ItemGroup>
 </Project>

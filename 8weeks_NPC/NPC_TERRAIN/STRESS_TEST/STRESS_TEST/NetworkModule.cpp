@@ -89,7 +89,7 @@ void error_display(const char* msg, int err_no)
 	std::cout << msg;
 	std::wcout << L"¿¡·¯" << lpMsgBuf << std::endl;
 
-	MessageBox(hWnd, lpMsgBuf, L"ERROR", 0);
+	//MessageBox(hWnd, lpMsgBuf, L"ERROR", 0);
 	LocalFree(lpMsgBuf);
 	// while (true);
 }
@@ -253,7 +253,7 @@ void Worker_Thread()
 
 constexpr int DELAY_LIMIT = 100;
 constexpr int DELAY_LIMIT2 = 150;
-constexpr int ACCEPT_DELY = 50;
+constexpr int ACCEPT_DELY = 10;
 
 void Adjust_Number_Of_Client()
 {
