@@ -149,6 +149,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="protocol.h" />
+    <ClInclude Include="protocol_2026.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
