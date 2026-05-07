@@ -17,12 +17,23 @@ int main(void)
 		lua_pop(L, 1);
 	}
 
-	lua_getglobal(L, "pos_x");
-	lua_getglobal(L, "pos_y");
-	rows = (int)lua_tonumber(L, -2);
-	cols = (int)lua_tonumber(L, -1);
-	std::cout << "Rows " << rows << ", Cols " << cols << std::endl;
-	lua_pop(L, 2);
+	//lua_getglobal(L, "pos_x");
+	//lua_getglobal(L, "pos_y");
+	//rows = (int)lua_tonumber(L, -2);
+	//cols = (int)lua_tonumber(L, -1);
+	//std::cout << "Rows " << rows << ", Cols " << cols << std::endl;
+	//lua_pop(L, 2);
+
+	lua_getglobal(L, "plustwo");
+	lua_pushnumber(L, 5);
+	lua_pcall(L, 1, 1, 0);
+	int result = (int)lua_tonumber(L, -1);
+	std::cout << "Result: " << result << std::endl;
+	lua_pop(L, 1);
+
+
 	lua_close(L);
-	return 0;
+
+
+
 }
