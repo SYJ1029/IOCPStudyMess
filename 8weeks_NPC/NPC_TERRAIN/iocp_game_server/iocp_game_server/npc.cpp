@@ -3,22 +3,38 @@
 #include <WS2tcpip.h>
 #include <MSWSock.h>
 #include <thread>
-#include <chrono>
 #include <vector>
 #include <mutex>
 #include <unordered_set>
+#include <chrono>
+#include <concurrent_priority_queue.h>
 #include "protocol.h"
 
 #pragma comment(lib, "WS2_32.lib")
 #pragma comment(lib, "MSWSock.lib")
 using namespace std;
+using namespace std::chrono;
 
 constexpr int VIEW_RANGE = 5;
-constexpr int DURATION = 1000;        // ms 단위, NPC heart_beat 주기
-constexpr int MOVE_COOL_TIME = 1000;  // ms 단위, NPC 이동 쿨타임
+constexpr int MOVE_COOL_TIME = 1000; // ms
+
+constexpr int EVENT_MOVE = 1;
+
+struct event_type {
+	int obj_id;
+	system_clock::time_point wakeup_time;
+	int event_id;
+	int target_id;
+
+	constexpr bool operator < (const event_type& _Left) const
+	{
+		return (wakeup_time > _Left.wakeup_time);
+	}
+};
+concurrency::concurrent_priority_queue<event_type> timer_queue;
 
 
-enum COMP_TYPE { OP_ACCEPT, OP_RECV, OP_SEND };
+enum COMP_TYPE { OP_ACCEPT, OP_RECV, OP_SEND, OP_NPCMOVE };
 class OVER_EXP {
 public:
 	WSAOVERLAPPED _over;
@@ -57,8 +73,10 @@ public:
 	int		_prev_remain;
 	unordered_set <int> _view_list;
 	mutex	_vl;
-	int		last_move_time;
-	long long npc_last_move_time;
+	int last_move_time;
+	std::atomic<bool> _active_npc;
+	system_clock::time_point npc_last_move_time;
+
 public:
 	SESSION()
 	{
@@ -68,7 +86,6 @@ public:
 		_name[0] = 0;
 		_state = ST_FREE;
 		_prev_remain = 0;
-		npc_last_move_time = 0;
 	}
 
 	~SESSION() {}
@@ -117,8 +134,28 @@ public:
 		p.type = SC_REMOVE_OBJECT;
 		do_send(&p);
 	}
+	void do_random_move();
+	void heart_beat()
+	{
+		// NPC의 경우, 일정 시간마다 랜덤한 방향으로 이동하는 기능을 구현한다.
+		// 이동한 후에는, 이동한 위치를 주변 플레이어들에게 알려준다.
+		do_random_move();
+	}
 
-	void heart_beat();
+	void wake_up()
+	{
+		// _active_npc가 false일 때만 true로 바꾸고 타이머 등록 (중복 등록 방지)
+		bool expected = false;
+		if (false == _active_npc.compare_exchange_strong(expected, true))
+			return;
+
+		event_type ev;
+		ev.obj_id = _id;
+		ev.event_id = EVENT_MOVE;
+		ev.target_id = -1;
+		ev.wakeup_time = system_clock::now() + milliseconds(MOVE_COOL_TIME);
+		timer_queue.push(ev);
+	}
 };
 
 HANDLE h_iocp;
@@ -163,6 +200,55 @@ bool can_see(int from, int to)
 {
 	if (abs(clients[from].x - clients[to].x) > VIEW_RANGE) return false;
 	return abs(clients[from].y - clients[to].y) <= VIEW_RANGE;
+}
+
+void SESSION::do_random_move()
+{
+	unordered_set<int> old_vl;
+	for (auto& obj : clients) {
+		if (ST_INGAME != obj._state) continue;
+		if (true == is_npc(obj._id)) continue;
+		if (true == can_see(_id, obj._id))
+			old_vl.insert(obj._id);
+	}
+
+
+	switch (rand() % 4) {
+	case 0: if (x < (W_WIDTH - 1)) x++; break;
+	case 1: if (x > 0) x--; break;
+	case 2: if (y < (W_HEIGHT - 1)) y++; break;
+	case 3:if (y > 0) y--; break;
+	}
+
+	unordered_set<int> new_vl;
+	for (auto& obj : clients) {
+		if (ST_INGAME != obj._state) continue;
+		if (true == is_npc(obj._id)) continue;
+		if (true == can_see(_id, obj._id))
+			new_vl.insert(obj._id);
+	}
+
+	for (auto pl : new_vl) {
+		if (0 == old_vl.count(pl)) {
+			// 플레이어의 시야에 등장
+			clients[pl].send_add_player_packet(_id);
+		}
+		else {
+			// 플레이어가 계속 보고 있음.
+			clients[pl].send_move_packet(_id);
+		}
+	}
+	///vvcxxccxvvdsvdvds
+	for (auto pl : old_vl)
+		if (0 == new_vl.count(pl))
+				clients[pl].send_remove_player_packet(_id);
+
+	if (_id == MAX_USER) {
+		auto delay = system_clock::now() - npc_last_move_time;
+		std::cout << "NPC " << _id << " moved. Time since last move: " << duration_cast<milliseconds>(delay).count() << "ms\n";
+	}
+
+	npc_last_move_time = system_clock::now();
 }
 
 void SESSION::send_move_packet(int c_id)
@@ -235,6 +321,10 @@ void process_packet(int c_id, char* packet)
 				continue;
 			if (is_pc(pl._id)) pl.send_add_player_packet(c_id);
 			clients[c_id].send_add_player_packet(pl._id);
+
+			// 시야에 들어온 NPC를 깨움
+			if (is_npc(pl._id))
+				pl.wake_up();
 		}
 		break;
 	}
@@ -279,8 +369,12 @@ void process_packet(int c_id, char* packet)
 				}
 			}
 
-			if (old_vlist.count(pl) == 0)
+			if (old_vlist.count(pl) == 0) {
 				clients[c_id].send_add_player_packet(pl);
+				// 새로 시야에 들어온 NPC를 깨움
+				if (is_npc(pl))
+					clients[pl].wake_up();
+			}
 		}
 
 		for (auto& pl : old_vlist)
@@ -289,8 +383,8 @@ void process_packet(int c_id, char* packet)
 				if (is_pc(pl))
 					clients[pl].send_remove_player_packet(c_id);
 			}
+		break;
 	}
-				break;
 	}
 }
 
@@ -317,88 +411,9 @@ void disconnect(int c_id)
 
 void do_npc_random_move(int npc_id)
 {
-	SESSION& npc = clients[npc_id];
-	unordered_set<int> old_vl;
-	for (auto& obj : clients) {
-		if (ST_INGAME != obj._state) continue;
-		if (true == is_npc(obj._id)) continue;
-		if (true == can_see(npc._id, obj._id))
-			old_vl.insert(obj._id);
-	}
-
-	int x = npc.x;
-	int y = npc.y;
-	switch (rand() % 4) {
-	case 0: if (x < (W_WIDTH - 1)) x++; break;
-	case 1: if (x > 0) x--; break;
-	case 2: if (y < (W_HEIGHT - 1)) y++; break;
-	case 3:if (y > 0) y--; break;
-	}
-	npc.x = x;
-	npc.y = y;
-
-	unordered_set<int> new_vl;
-	for (auto& obj : clients) {
-		if (ST_INGAME != obj._state) continue;
-		if (true == is_npc(obj._id)) continue;
-		if (true == can_see(npc._id, obj._id))
-			new_vl.insert(obj._id);
-	}
-
-	for (auto pl : new_vl) {
-		if (0 == old_vl.count(pl)) {
-			// 플레이어의 시야에 등장
-			clients[pl].send_add_player_packet(npc._id);
-		}
-		else {
-			// 플레이어가 계속 보고 있음.
-			clients[pl].send_move_packet(npc._id);
-		}
-	}
-	///vvcxxccxvvdsvdvds
-	for (auto pl : old_vl) {
-		if (0 == new_vl.count(pl)) {
-			clients[pl]._vl.lock();
-			if (0 != clients[pl]._view_list.count(npc._id)) {
-				clients[pl]._vl.unlock();
-				clients[pl].send_remove_player_packet(npc._id);
-			}
-			else {
-				clients[pl]._vl.unlock();
-			}
-		}
-	}
-}
-
-void SESSION::heart_beat()
-{
-	using namespace chrono;
-	long long now_ms = duration_cast<milliseconds>(
-		system_clock::now().time_since_epoch()).count();
-
-	if (now_ms - npc_last_move_time >= MOVE_COOL_TIME) {
-		do_npc_random_move(_id);
-		npc_last_move_time = now_ms;
-	}
-}
-
-void ai_thread(HANDLE h_iocp)
-{
-	// Heart Beat 함수만 주기적으로 실행
-	using namespace chrono;
-	while (true) {
-		auto curr_heart_beat = system_clock::now();
-
-		for (int i = MAX_USER; i < MAX_USER + MAX_NPC; ++i) {
-			clients[i].heart_beat();
-		}
-
-		auto elapsed = duration_cast<milliseconds>(
-			system_clock::now() - curr_heart_beat).count();
-		long long delay = DURATION - elapsed;
-		if (delay < 0) delay = 0;
-		//Sleep(static_cast<DWORD>(delay));
-	}
+	// NPC의 랜덤 이동을 처리하는 함수
+	// npc_id에 해당하는 NPC를 랜덤한 방향으로 이동시키고, 주변 플레이어들에게 이동 정보를 알려준다.
+	clients[npc_id].do_random_move();
 }
 
 void worker_thread(HANDLE h_iocp)
@@ -474,10 +489,38 @@ void worker_thread(HANDLE h_iocp)
 		case OP_SEND:
 			delete ex_over;
 			break;
+		case OP_NPCMOVE: {
+			delete ex_over;
+			int npc_id = static_cast<int>(key);
+			do_npc_random_move(npc_id);
+
+			// 시야 내에 플레이어가 있는지 확인
+			bool has_nearby_player = false;
+			for (int i = 0; i < MAX_USER; ++i) {
+				if (clients[i]._state == ST_INGAME && can_see(npc_id, i)) {
+					has_nearby_player = true;
+					break;
+				}
+			}
+
+			if (has_nearby_player) {
+				// 다음 이동 이벤트 재등록
+				event_type ev;
+				ev.event_id = EVENT_MOVE;
+				ev.obj_id = npc_id;
+				ev.target_id = -1;
+				ev.wakeup_time = system_clock::now() + milliseconds(MOVE_COOL_TIME);
+				timer_queue.push(ev);
+			}
+			else {
+				// 시야 내 플레이어 없음 → AI 비활성화 (다음 wake_up() 호출까지 대기)
+				clients[npc_id]._active_npc = false;
+			}
+			break;
+		}
 		}
 	}
 }
-
 void InitializeNPC()
 {
 	cout << "NPC intialize begin.\n";
@@ -487,9 +530,82 @@ void InitializeNPC()
 		clients[i]._id = i;
 		sprintf_s(clients[i]._name, "NPC%d", i);
 		clients[i]._state = ST_INGAME;
+		clients[i].last_move_time = 0;
+		clients[i].npc_last_move_time = system_clock::now();
 	}
 	cout << "NPC initialize end.\n";
 }
+
+void HB_thread ()
+{
+	using namespace chrono;
+
+	while (true) {
+		auto start_time = chrono::system_clock::now();
+		for (int i = MAX_USER; i < MAX_USER + MAX_NPC; ++i) {
+			if (clients[i]._state != ST_INGAME) continue;
+			clients[i].heart_beat();
+		}
+		auto end_time = chrono::system_clock::now();
+		auto elapsed = end_time - start_time;
+		if (elapsed < chrono::milliseconds(MOVE_COOL_TIME)) {
+			this_thread::sleep_for(chrono::milliseconds(MOVE_COOL_TIME) - elapsed);
+		}
+
+		std::cout << "Elapsed Time : "
+			<< duration_cast<milliseconds>(elapsed).count()
+			<< "ms.\n";
+	}
+}
+
+void ai_thread()
+{
+	while (true) {
+		int elapsed_time = 1000;
+		auto current_time = system_clock::now();
+		for (int i = MAX_USER; i < MAX_USER + MAX_NPC; ++i) {
+			if (clients[i]._state != ST_INGAME) continue;
+			auto duration = duration_cast<milliseconds>(current_time - clients[i].npc_last_move_time).count();
+			if (duration >= MOVE_COOL_TIME) {
+				do_npc_random_move(i);
+				clients[i].npc_last_move_time = current_time;
+
+				if (duration > elapsed_time) elapsed_time++;
+				else if (duration < elapsed_time) elapsed_time--;
+
+			}
+		}
+		std::cout << "Elapsed Time : " << elapsed_time << "ms.\n";
+	}
+}
+
+void timer_thread()
+{
+	while (true) {
+		event_type ev;
+		if (timer_queue.try_pop(ev)) {
+			auto now = system_clock::now();
+			if (ev.wakeup_time <= now) {
+				switch (ev.event_id) {
+				case EVENT_MOVE:
+					OVER_EXP* move_over = new OVER_EXP;
+					move_over->_comp_type = OP_NPCMOVE; // 이동 이벤트는 OP_SEND로 처리
+					PostQueuedCompletionStatus(h_iocp, -1, ev.obj_id, &move_over->_over); // 이동 이벤트를 워커 스레드로 전달
+					break;
+				}
+			}
+			else {
+				// 아직 시간이 안 됐으면 다시 큐에 넣음
+				timer_queue.push(ev);
+				this_thread::sleep_for(chrono::milliseconds(1));
+			}
+		}
+		else {
+			this_thread::sleep_for(chrono::milliseconds(1));
+		}
+	}
+}
+
 
 int main()
 {
@@ -514,17 +630,14 @@ int main()
 	g_a_over._comp_type = OP_ACCEPT;
 	AcceptEx(g_s_socket, g_c_socket, g_a_over._send_buf, 0, addr_size + 16, addr_size + 16, 0, &g_a_over._over);
 
-	vector <thread> worker_threads;
+	vector<thread> worker_threads;
+	thread timer_th(timer_thread);   // HB_thread 대신 timer_thread 사용
 	int num_threads = std::thread::hardware_concurrency();
 	for (int i = 0; i < num_threads; ++i)
 		worker_threads.emplace_back(worker_thread, h_iocp);
-
-	thread ai_th{ ai_thread, h_iocp };
-
 	for (auto& th : worker_threads)
 		th.join();
-	ai_th.join();
-
+	timer_th.join();
 	closesocket(g_s_socket);
 	WSACleanup();
 }
