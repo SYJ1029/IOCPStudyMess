@@ -4,7 +4,7 @@
 #include <MSWSock.h>
 #include <thread>
 #include <vector>
-#include "protocol.h"
+#include "protocol_2026.h"
 #include <tbb/concurrent_unordered_map.h>
 #include <mutex>
 #include <unordered_set>

@@ -27,6 +27,9 @@
     <ClCompile Include="npc.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
+    <ClCompile Include="npc_sector.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="protocol_2026.h">
