@@ -45,7 +45,13 @@ int main() {
                     retcode = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt);
 
                     // retcode = SQLExecDirect(hstmt, (SQLWCHAR*)L"SELECT CustomerID, ContactName, Phone FROM CUSTOMERS ORDER BY 2, 1, 3", SQL_NTS);
-                    retcode = SQLExecDirect(hstmt, (SQLWCHAR*)L"SELECT user_id, user_name, user_level FROM dbo.user_table ORDER BY 1", SQL_NTS);
+                    // retcode = SQLExecDirect(hstmt, (SQLWCHAR*)L"SELECT user_id, user_name, user_level FROM dbo.user_table ORDER BY 1", SQL_NTS);
+                    // 10레벨 초과인 유저를 가져오기 위한 저장 프로시저 실행
+                    retcode = SQLExecDirect(
+                        hstmt, 
+                        (SQLWCHAR*)L"EXEC select_highlevel @Param = 10", 
+                        SQL_NTS
+                    );
                     if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
 
                         // Bind columns 1, 2, and 3  
