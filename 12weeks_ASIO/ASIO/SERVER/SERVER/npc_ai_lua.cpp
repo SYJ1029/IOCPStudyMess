@@ -114,8 +114,7 @@ public:
 	void do_send(void* packet)
 	{
 		size_t p_size = *reinterpret_cast<unsigned char*>(packet);
-		_socket.async_write_some(boost::asio::buffer(packet, p_size),
-			[](boost::system::error_code ec, std::size_t length){});
+		_socket.write_some(boost::asio::buffer(packet, p_size));
 	}
 	void send_login_info_packet()
 	{
