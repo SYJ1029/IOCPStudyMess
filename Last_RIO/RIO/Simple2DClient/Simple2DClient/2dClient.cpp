@@ -7,7 +7,7 @@
 using namespace std;
 using namespace chrono;
 
-#include "..\..\SimpleIOCPServer\SimpleIOCPServer\protocol.h"
+#include "..\..\SyRioServer\SyRioServer\protocol.h"
 
 sf::TcpSocket g_socket;
 
