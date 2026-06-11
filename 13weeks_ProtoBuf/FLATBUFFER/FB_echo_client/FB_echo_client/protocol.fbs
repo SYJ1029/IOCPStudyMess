@@ -1,0 +1,14 @@
+enum PACKET_TYPE :ubyte {
+   MESSAGE_C2S = 100,
+   MESSAGE_S2C = 101,
+}
+
+
+table Message_C2S {
+   msg : string;
+   }
+
+table Message_S2C {
+   seq : int;
+   msg : string;
+   }
